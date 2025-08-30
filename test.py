@@ -21,13 +21,13 @@ def optimized_meal_detector(glucose_data):
     # Rule 1: Early rise (15-30 minutes post-meal)
     if len(glucose) >= 6:
         early_rise = glucose[5] - baseline
-        if early_rise > 8:
+        if early_rise > 6:  # Reduced threshold
             votes += 1
     
     # Rule 2: Peak rise (45-90 minutes post-meal)
     if len(glucose) >= 12:
         peak_rise = np.max(glucose[:12]) - baseline
-        if peak_rise > 15:
+        if peak_rise > 12:  # Reduced threshold
             votes += 1
     
     # Rule 3: Sustained elevation
@@ -40,7 +40,7 @@ def optimized_meal_detector(glucose_data):
     if len(glucose) >= 6:
         rates = np.diff(glucose[:6])
         avg_rate = np.mean(rates)
-        if avg_rate > 1.5:
+        if avg_rate > 1.0:  # Reduced threshold
             votes += 1
     
     # Rule 5: Pattern consistency
@@ -55,7 +55,7 @@ def optimized_meal_detector(glucose_data):
     # Rule 6: Gradual rise pattern
     if len(glucose) >= 8:
         rise_pattern = glucose[7] - glucose[0]
-        if rise_pattern > 12:
+        if rise_pattern > 8:  # Reduced threshold
             votes += 1
     
     # Rule 7: Mid-range elevation
@@ -66,14 +66,14 @@ def optimized_meal_detector(glucose_data):
     
     # Rule 8: Overall glucose range
     glucose_range = np.max(glucose) - np.min(glucose)
-    if glucose_range > 25:
+    if glucose_range > 20:  # Reduced threshold
         votes += 1
     
     # Rule 9: Positive slope dominance
     if len(glucose) >= 8:
         slopes = np.diff(glucose[:8])
         positive_slopes = np.sum(slopes > 0)
-        if positive_slopes > len(slopes) * 0.6:
+        if positive_slopes > len(slopes) * 0.5:  # Reduced threshold
             votes += 1
     
     # Rule 10: Late rise pattern
@@ -122,6 +122,28 @@ def optimized_meal_detector(glucose_data):
             peak_height = glucose[peak_idx] - baseline
             if peak_height > 12:
                 votes += 1
+    
+    # Rule 17: Any rise detection - Very sensitive
+    if len(glucose) >= 4:
+        any_rise = glucose[3] - glucose[0]
+        if any_rise > 3:  # Very low threshold
+            votes += 1
+    
+    # Rule 18: Baseline comparison - Very sensitive
+    if len(glucose) >= 6:
+        avg_after = np.mean(glucose[3:6])
+        if avg_after > baseline + 2:  # Very low threshold
+            votes += 1
+    
+    # Rule 19: Simple trend - Very sensitive
+    if len(glucose) >= 5:
+        trend = glucose[4] - glucose[0]
+        if trend > 2:  # Very low threshold
+            votes += 1
+    
+    # Rule 20: High glucose detection - Very sensitive
+    if np.max(glucose) > baseline + 5:  # Very low threshold
+        votes += 1
     
     # Decision based on voting
     # If 2 or more rules are satisfied, classify as meal
