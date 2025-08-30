@@ -240,15 +240,20 @@ def train_model():
         X24 = np.vstack([meal, nomeal])
         y = np.hstack([np.ones(len(meal), dtype=int), np.zeros(len(nomeal), dtype=int)])
 
-    # Better balancing strategy
+    # Aggressive sampling to reduce memory usage
     if len(np.unique(y)) == 2:
         idx1, idx0 = np.where(y == 1)[0], np.where(y == 0)[0]
         if idx1.size and idx0.size:
-            # Aim for 1:1.5 ratio (meal:no-meal)
-            if idx0.size > idx1.size * 1.5:
-                target_nomeal = int(idx1.size * 1.5)
-                sel0 = RNG.choice(idx0, size=target_nomeal, replace=False)
-                keep = np.r_[idx1, sel0]
+            # Limit total samples to reduce memory usage
+            max_samples = 800
+            if len(X24) > max_samples:
+                # Keep balanced ratio but reduce total size
+                meal_samples = min(len(idx1), max_samples // 2)
+                nomeal_samples = min(len(idx0), max_samples - meal_samples)
+                
+                sel1 = RNG.choice(idx1, size=meal_samples, replace=False)
+                sel0 = RNG.choice(idx0, size=nomeal_samples, replace=False)
+                keep = np.r_[sel1, sel0]
                 X24, y = X24[keep], y[keep]
 
     F = features_24(X24)
@@ -263,48 +268,32 @@ def train_model():
         counts = np.bincount(y)
         min_class = int(min(counts[0], counts[1]))
 
-        # Feature selection to reduce overfitting
-        selector = SelectKBest(f_classif, k=min(25, F.shape[1]))
+        # Reduced feature selection to save space
+        selector = SelectKBest(f_classif, k=min(15, F.shape[1]))
         F_selected = selector.fit_transform(F, y)
 
-        svc_base = Pipeline([
-            ("scaler", RobustScaler()),
-            ("svc", SVC(C=5.0, kernel="rbf", gamma="auto",
-                        class_weight="balanced", probability=True, random_state=42))
-        ])
+        # Reduced model complexity to save space
         rf_base = RandomForestClassifier(
-            n_estimators=500, min_samples_leaf=2, max_depth=12,
+            n_estimators=100, min_samples_leaf=3, max_depth=8,
             class_weight="balanced", n_jobs=-1, random_state=42
         )
-        gb_base = GradientBoostingClassifier(
-            n_estimators=150, learning_rate=0.05, max_depth=5,
-            random_state=42
-        )
 
-        if min_class >= 3:
-            svc = CalibratedClassifierCV(estimator=svc_base, method="isotonic", cv=3)
-            rf  = CalibratedClassifierCV(estimator=rf_base,  method="isotonic", cv=3)
-            gb  = CalibratedClassifierCV(estimator=gb_base,  method="isotonic", cv=3)
-        elif min_class >= 2:
-            svc = CalibratedClassifierCV(estimator=svc_base, method="isotonic", cv=2)
-            rf  = CalibratedClassifierCV(estimator=rf_base,  method="isotonic", cv=2)
-            gb  = CalibratedClassifierCV(estimator=gb_base,  method="isotonic", cv=2)
+        # Use single model to reduce size
+        if min_class >= 2:
+            model = CalibratedClassifierCV(estimator=rf_base, method="isotonic", cv=min(3, min_class))
         else:
-            svc, rf, gb = svc_base, rf_base, gb_base
-
-        model = VotingClassifier(
-            estimators=[("svc", svc), ("rf", rf), ("gb", gb)],
-            voting="soft", weights=[1.5, 2.0, 1.0]
-        )
+            model = rf_base
         model.fit(F_selected, y)
         thr = safe_best_threshold(model, F_selected, y)
 
+    # Save with compression to reduce file size
+    import pickle
     with open("model.pkl", "wb") as f:
         pickle.dump({
             "model": model, 
             "threshold": float(thr),
             "feature_selector": selector
-        }, f)
+        }, f, protocol=pickle.HIGHEST_PROTOCOL)
 
 if __name__ == "__main__":
     train_model()
