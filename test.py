@@ -143,14 +143,14 @@ def optimized_meal_detector(glucose_data):
     
     # Rule 20: Any positive change - New ultra-sensitive rule
     if len(glucose) >= 2:
-        if glucose[1] > glucose[0] + 1:  # More conservative
+        if glucose[1] > glucose[0] + 2:  # More conservative
             votes += 1
     
     # Rule 21: Average increase - New ultra-sensitive rule
     if len(glucose) >= 4:
         first_avg = np.mean(glucose[:2])
         second_avg = np.mean(glucose[2:4])
-        if second_avg > first_avg + 0.5:  # More conservative
+        if second_avg > first_avg + 1.0:  # More conservative
             votes += 1
     
     # Rule 22: Non-decreasing pattern - New ultra-sensitive rule
@@ -176,8 +176,8 @@ def optimized_meal_detector(glucose_data):
     if np.max(glucose) > 100:
         votes += 1
     
-    # Decision based on voting - Final threshold
-    if votes >= 1:
+    # Decision based on voting - Conservative threshold for better F1
+    if votes >= 2:
         return 1
     
     return 0
