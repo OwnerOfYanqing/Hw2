@@ -1,20 +1,6 @@
 import pandas as pd
 import numpy as np
 import pickle
-from scipy.stats import skew, kurtosis
-from scipy.signal import find_peaks, savgol_filter
-from scipy.fft import fft, fftfreq
-
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler, RobustScaler
-from sklearn.svm import SVC
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, VotingClassifier
-from sklearn.calibration import CalibratedClassifierCV
-from sklearn.model_selection import StratifiedKFold, GridSearchCV
-from sklearn.metrics import f1_score, classification_report
-from sklearn.base import clone
-from sklearn.dummy import DummyClassifier
-from sklearn.neural_network import MLPClassifier
 
 FIVE_MIN = pd.Timedelta(minutes=5)
 TOL = pd.Timedelta(minutes=5)
@@ -71,250 +57,127 @@ def extract_meal_24(insulin_df, cgm_df):
         idx30 = pd.date_range(start, periods=30, freq="5min")
         seg30 = cgm_series.reindex(idx30).interpolate(limit_direction="both")
         if len(seg30) == 30 and seg30.isna().sum() <= 6:
-            out.append(seg30.values[6:])  # keep 24 after event
+            out.append(seg30.values[6:])  # keep 24 after 30
         i = j
-    return np.asarray(out)
-
-def _collect_nomeal(insulin_df, cgm_series, start, max_end, out_list):
-    cur = start
-    while cur + pd.Timedelta(hours=2) <= max_end:
-        end = cur + pd.Timedelta(hours=2)
-        overlapped = insulin_df[
-            (insulin_df["datetime"] >= cur)
-            & (insulin_df["datetime"] < end)
-            & (insulin_df["BWZ Carb Input (grams)"] > 0)
-        ]
-        if not overlapped.empty:
-            cur = overlapped["datetime"].max() + pd.Timedelta(hours=2)
-            continue
-        idx24 = pd.date_range(cur, periods=24, freq="5min")
-        seg24 = cgm_series.reindex(idx24).interpolate(limit_direction="both")
-        if len(seg24) == 24 and seg24.isna().sum() <= 6:
-            out_list.append(seg24.values)
-        cur += FIVE_MIN
+    return np.array(out)
 
 def extract_nomeal_24(insulin_df, cgm_df):
-    insulin_df, cgm_series, meal_times, cmin, cmax = prep_frames(insulin_df, cgm_df)
+    insulin_df, cgm_series, meal_times, start, end = prep_frames(insulin_df, cgm_df)
     out = []
-    if meal_times:
-        _collect_nomeal(insulin_df, cgm_series, cmin, meal_times[0] - pd.Timedelta(minutes=30), out)
-        for a, b in zip(meal_times[:-1], meal_times[1:]):
-            _collect_nomeal(insulin_df, cgm_series, a + pd.Timedelta(hours=2), b - pd.Timedelta(minutes=30), out)
-        _collect_nomeal(insulin_df, cgm_series, meal_times[-1] + pd.Timedelta(hours=2), cmax, out)
-    return np.asarray(out)
+    for tm in meal_times:
+        for offset in [-pd.Timedelta(hours=4), pd.Timedelta(hours=4)]:
+            start_time = tm + offset
+            if start_time >= start and start_time + pd.Timedelta(minutes=120) <= end:
+                idx30 = pd.date_range(start_time, periods=30, freq="5min")
+                seg30 = cgm_series.reindex(idx30).interpolate(limit_direction="both")
+                if len(seg30) == 30 and seg30.isna().sum() <= 6:
+                    out.append(seg30.values[6:])
+    return np.array(out)
 
-# ---------- enhanced features ----------
-def features_24(M):
-    feats = []
-    for row in M:
-        row = np.nan_to_num(row.astype(float))
+def medical_meal_detector(glucose_data):
+    """
+    Medically-informed meal detector based on typical post-meal glucose patterns
+    """
+    if len(glucose_data) < 24:
+        return 0
+    
+    # Convert to numpy array
+    glucose = np.array(glucose_data)
+    
+    # Calculate baseline (first 2 points average)
+    baseline = np.mean(glucose[:2])
+    
+    # Rule 1: Early rise (15-30 minutes post-meal)
+    # Typical post-meal glucose starts rising within 15-30 minutes
+    if len(glucose) >= 6:
+        early_rise = glucose[5] - baseline
+        if early_rise > 10:  # Rise of more than 10 mg/dL in 30 minutes
+            return 1
+    
+    # Rule 2: Peak rise (45-90 minutes post-meal)
+    # Post-meal glucose typically peaks between 45-90 minutes
+    if len(glucose) >= 12:
+        peak_rise = np.max(glucose[:12]) - baseline
+        if peak_rise > 20:  # Peak rise of more than 20 mg/dL
+            return 1
+    
+    # Rule 3: Sustained elevation
+    # Post-meal glucose remains elevated for 1-2 hours
+    if len(glucose) >= 18:
+        sustained_rise = glucose[17] - baseline
+        if sustained_rise > 15:  # Still elevated after 1.5 hours
+            return 1
+    
+    # Rule 4: Rate of rise
+    # Calculate average rate of rise in first 6 points
+    if len(glucose) >= 6:
+        rates = np.diff(glucose[:6])
+        avg_rate = np.mean(rates)
+        if avg_rate > 2:  # Average rate of rise > 2 mg/dL per 5 minutes
+            return 1
+    
+    # Rule 5: Pattern consistency
+    # Check if the pattern looks like a typical meal response
+    if len(glucose) >= 12:
+        # Look for a rise followed by a peak
+        first_half = glucose[:6]
+        second_half = glucose[6:12]
         
-        # Apply smoothing for better feature extraction
-        try:
-            row_smooth = savgol_filter(row, window_length=5, polyorder=2)
-        except:
-            row_smooth = row
-            
-        baseline = float(np.mean(row))
-        x = row - baseline
-        x_smooth = row_smooth - baseline
+        if (np.max(second_half) > np.max(first_half) and 
+            np.mean(second_half) > np.mean(first_half)):
+            return 1
+    
+    return 0
 
-        # Basic statistical features
-        mean = float(np.mean(x))
-        std = float(np.std(x))
-        vmin = float(np.min(x))
-        vmax = float(np.max(x))
-        rge = vmax - vmin
-        rms = float(np.sqrt(np.mean(x**2)))
-        skw = float(skew(x, bias=False)) if std > 1e-12 else 0.0
-        kur = float(kurtosis(x, bias=False)) if std > 1e-12 else 0.0
-
-        # Enhanced derivative features
-        dx = np.diff(x)
-        dv_mean = float(np.mean(dx)) if dx.size else 0.0
-        dv_std  = float(np.std(dx))  if dx.size else 0.0
-        dv_max  = float(np.max(dx))  if dx.size else 0.0
-        dv_min  = float(np.min(dx))  if dx.size else 0.0
-        ddx = np.diff(dx)
-        da_std = float(np.std(ddx)) if ddx.size else 0.0
-
-        # Area under curve
-        try:
-            auc = float(np.trapezoid(x))
-        except Exception:
-            auc = float(np.trapz(x))
-
-        # Peak analysis
-        peaks, _ = find_peaks(x, height=0.5*std, distance=3)
-        num_peaks = int(len(peaks))
-        t_max = int(np.argmax(x))
-        pos_sum = float(np.sum(dx[dx > 0])) if dx.size else 0.0
-
-        # Enhanced slope features
-        max_slope30 = 0.0
-        max_slope15 = 0.0
-        for k in range(0, len(x) - 6):
-            slope6 = (x[k + 6] - x[k]) / 6.0
-            max_slope30 = max(max_slope30, slope6)
-        for k in range(0, len(x) - 3):
-            slope3 = (x[k + 3] - x[k]) / 3.0
-            max_slope15 = max(max_slope15, slope3)
-
-        # FFT features
-        fft_mag = np.abs(fft(x))
-        if fft_mag.size < 7:
-            fft_feats = np.pad(fft_mag[1:], (0, 6 - max(0, fft_mag.size - 1)))
-        else:
-            fft_feats = fft_mag[1:7]
-
-        # Additional features
-        # Rate of change features
-        rate_of_change = np.diff(x_smooth)
-        roc_mean = float(np.mean(rate_of_change)) if rate_of_change.size else 0.0
-        roc_std = float(np.std(rate_of_change)) if rate_of_change.size else 0.0
-        
-        # Glucose variability
-        glucose_cv = float(std / baseline) if baseline > 0 else 0.0
-        
-        # Time-based features
-        time_to_peak = float(t_max) / len(x) if len(x) > 0 else 0.0
-        
-        # Smoothness features
-        smoothness = float(np.std(np.diff(x_smooth))) if len(x_smooth) > 1 else 0.0
-        
-        # Energy features
-        energy = float(np.sum(x**2))
-        
-        # Entropy-like features
-        hist, _ = np.histogram(x, bins=10)
-        hist = hist[hist > 0]
-        entropy = float(-np.sum(hist * np.log(hist + 1e-10))) if hist.size > 0 else 0.0
-
-        feat = [
-            baseline, mean, std, vmin, vmax, rge, rms, skw, kur,
-            dv_mean, dv_std, dv_max, dv_min, da_std,
-            auc, num_peaks, t_max, pos_sum, max_slope30, max_slope15,
-            float(fft_feats[0]), float(fft_feats[1]), float(fft_feats[2]),
-            float(fft_feats[3]), float(fft_feats[4]), float(fft_feats[5]),
-            roc_mean, roc_std, glucose_cv, time_to_peak, smoothness, energy, entropy
-        ]
-        feats.append(np.nan_to_num(feat))
-    return np.asarray(feats, dtype=float)
-
-# ---------- threshold search ----------
-def _grid_thr_from_probs(y, probs):
-    best_thr, best_f1 = 0.5, -1.0
-    for thr in np.arange(0.25, 0.7501, 0.001):  # More granular search
-        f1 = f1_score(y, (probs >= thr).astype(int), zero_division=0)
-        if f1 > best_f1:
-            best_thr, best_f1 = float(thr), f1
-    return best_thr
-
-def safe_best_threshold(model, X, y):
-    y = y.astype(int)
-    if len(np.unique(y)) < 2:
-        return 0.5
-    counts = np.bincount(y)
-    min_class = int(min(counts[0], counts[1]))
-    if min_class < 2:
-        mdl = clone(model).fit(X, y)
-        probs = mdl.predict_proba(X)[:, 1]
-        return _grid_thr_from_probs(y, probs)
-    n_splits = min(5, min_class)
-    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
-    probs = np.zeros_like(y, dtype=float)
-    for tr, va in skf.split(X, y):
-        mdl = clone(model).fit(X[tr], y[tr])
-        probs[va] = mdl.predict_proba(X[va])[:, 1]
-    return _grid_thr_from_probs(y, probs)
-
-# ---------- train ----------
-def train_model():
-    ins1 = pd.read_csv("InsulinData.csv", low_memory=False)
-    cgm1 = pd.read_csv("CGMData.csv", low_memory=False)
-    ins2 = pd.read_csv("Insulin_patient2.csv", low_memory=False)
-    cgm2 = pd.read_csv("CGM_patient2.csv", low_memory=False)
-
-    m1, n1 = extract_meal_24(ins1, cgm1), extract_nomeal_24(ins1, cgm1)
-    m2, n2 = extract_meal_24(ins2, cgm2), extract_nomeal_24(ins2, cgm2)
-
-    meal   = m1 if m2.size == 0 else (m2 if m1.size == 0 else np.vstack([m1, m2]))
-    nomeal = n1 if n2.size == 0 else (n2 if n1.size == 0 else np.vstack([n1, n2]))
-
-    if meal.size == 0 and nomeal.size == 0:
-        X24 = np.zeros((2, 24)); y = np.array([1, 0], dtype=int)
-    elif meal.size == 0 or nomeal.size == 0:
-        X24 = meal if meal.size else nomeal
-        y = np.ones(len(X24), dtype=int) if meal.size else np.zeros(len(X24), dtype=int)
-    else:
-        X24 = np.vstack([meal, nomeal])
-        y = np.hstack([np.ones(len(meal), dtype=int), np.zeros(len(nomeal), dtype=int)])
-
-    # Improved balancing
-    if len(np.unique(y)) == 2:
-        idx1, idx0 = np.where(y == 1)[0], np.where(y == 0)[0]
-        if idx1.size and idx0.size and idx0.size > idx1.size * 4:
-            sel0 = RNG.choice(idx0, size=min(int(2.0 * idx1.size), idx0.size), replace=False)
-            keep = np.r_[idx1, sel0]
-            X24, y = X24[keep], y[keep]
-
-    F = features_24(X24)
-
-    if len(np.unique(y)) < 2:
-        model = Pipeline([("scaler", StandardScaler()),
-                          ("clf", DummyClassifier(strategy="most_frequent"))])
-        model.fit(F, y)
-        thr = 0.5
-    else:
-        counts = np.bincount(y)
-        min_class = int(min(counts[0], counts[1]))
-
-        # Enhanced model ensemble
-        svc_base = Pipeline([
-            ("scaler", RobustScaler()),
-            ("svc", SVC(C=10.0, kernel="rbf", gamma="scale",
-                        class_weight="balanced", probability=True, random_state=42))
-        ])
-        
-        rf_base = RandomForestClassifier(
-            n_estimators=800, min_samples_leaf=2, max_depth=15,
-            class_weight="balanced_subsample", n_jobs=-1, random_state=42
-        )
-        
-        gb_base = GradientBoostingClassifier(
-            n_estimators=300, learning_rate=0.1, max_depth=6,
-            subsample=0.8, random_state=42
-        )
-        
-        mlp_base = Pipeline([
-            ("scaler", StandardScaler()),
-            ("mlp", MLPClassifier(hidden_layer_sizes=(100, 50), max_iter=500,
-                                 alpha=0.01, random_state=42))
-        ])
-
-        if min_class >= 3:
-            svc = CalibratedClassifierCV(estimator=svc_base, method="sigmoid", cv=3)
-            rf  = CalibratedClassifierCV(estimator=rf_base,  method="sigmoid", cv=3)
-            gb  = CalibratedClassifierCV(estimator=gb_base,  method="sigmoid", cv=3)
-            mlp = CalibratedClassifierCV(estimator=mlp_base, method="sigmoid", cv=3)
-        elif min_class >= 2:
-            svc = CalibratedClassifierCV(estimator=svc_base, method="sigmoid", cv=2)
-            rf  = CalibratedClassifierCV(estimator=rf_base,  method="sigmoid", cv=2)
-            gb  = CalibratedClassifierCV(estimator=gb_base,  method="sigmoid", cv=2)
-            mlp = CalibratedClassifierCV(estimator=mlp_base, method="sigmoid", cv=2)
-        else:
-            svc, rf, gb, mlp = svc_base, rf_base, gb_base, mlp_base
-
-        # Enhanced voting with more models
-        model = VotingClassifier(estimators=[
-            ("svc", svc), ("rf", rf), ("gb", gb), ("mlp", mlp)
-        ], voting="soft", weights=[2.5, 1.5, 1.0, 1.0])
-        
-        model.fit(F, y)
-        thr = safe_best_threshold(model, F, y)
-
+def main():
+    print("Loading data...")
+    insulin_df = pd.read_csv("InsulinData.csv")
+    cgm_df = pd.read_csv("CGMData.csv")
+    
+    print("Extracting meal windows...")
+    meal_windows = extract_meal_24(insulin_df, cgm_df)
+    print(f"Found {len(meal_windows)} meal windows")
+    
+    print("Extracting non-meal windows...")
+    nomeal_windows = extract_nomeal_24(insulin_df, cgm_df)
+    print(f"Found {len(nomeal_windows)} non-meal windows")
+    
+    if len(meal_windows) == 0 or len(nomeal_windows) == 0:
+        print("Error: No meal or non-meal windows found!")
+        return
+    
+    # Test medical detector on training data
+    print("Testing medical meal detector...")
+    
+    meal_predictions = []
+    for window in meal_windows:
+        pred = medical_meal_detector(window)
+        meal_predictions.append(pred)
+    
+    nomeal_predictions = []
+    for window in nomeal_windows:
+        pred = medical_meal_detector(window)
+        nomeal_predictions.append(pred)
+    
+    # Calculate accuracy
+    meal_accuracy = np.mean(meal_predictions)
+    nomeal_accuracy = 1 - np.mean(nomeal_predictions)
+    overall_accuracy = (meal_accuracy + nomeal_accuracy) / 2
+    
+    print(f"Meal detection accuracy: {meal_accuracy:.4f}")
+    print(f"Non-meal detection accuracy: {nomeal_accuracy:.4f}")
+    print(f"Overall accuracy: {overall_accuracy:.4f}")
+    
+    # Save the medical detector
+    model_dict = {
+        'detector': medical_meal_detector,
+        'model_type': 'medical_rule'
+    }
+    
     with open("model.pkl", "wb") as f:
-        pickle.dump({"model": model, "threshold": float(thr)}, f)
+        pickle.dump(model_dict, f)
+    
+    print("Medical meal detector saved successfully!")
 
 if __name__ == "__main__":
-    train_model()
+    main()
