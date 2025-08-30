@@ -4,7 +4,7 @@ import pickle
 
 def optimized_meal_detector(glucose_data):
     """
-    Final optimized meal detector for F1 >= 0.8
+    Final optimized meal detector for maximum F1 score
     """
     if len(glucose_data) < 24:
         return 0
@@ -42,12 +42,10 @@ def optimized_meal_detector(glucose_data):
     if len(glucose) >= 12:
         first_half = glucose[:6]
         second_half = glucose[6:12]
-        
-        if (np.max(second_half) > np.max(first_half) and 
-            np.mean(second_half) > np.mean(first_half)):
+        if np.max(second_half) > np.max(first_half):
             votes += 1
     
-    # Rule 6: Gradual rise pattern
+    # Rule 6: Gradual rise
     if len(glucose) >= 8:
         rise_pattern = glucose[7] - glucose[0]
         if rise_pattern > 12:
@@ -59,19 +57,19 @@ def optimized_meal_detector(glucose_data):
         if mid_rise > 10:
             votes += 1
     
-    # Rule 8: Overall glucose range
+    # Rule 8: Overall range
     glucose_range = np.max(glucose) - np.min(glucose)
     if glucose_range > 25:
         votes += 1
     
-    # Rule 9: Positive slope dominance
+    # Rule 9: Positive slopes
     if len(glucose) >= 8:
         slopes = np.diff(glucose[:8])
         positive_slopes = np.sum(slopes > 0)
         if positive_slopes > len(slopes) * 0.6:
             votes += 1
     
-    # Rule 10: Late rise pattern
+    # Rule 10: Late rise
     if len(glucose) >= 16:
         late_rise = glucose[15] - glucose[8]
         if late_rise > 8:
@@ -83,7 +81,7 @@ def optimized_meal_detector(glucose_data):
         if early_accel > 5:
             votes += 1
     
-    # Rule 12: Steady rise pattern
+    # Rule 12: Steady rise
     if len(glucose) >= 14:
         steady_rise = glucose[13] - glucose[6]
         if steady_rise > 8:
@@ -104,7 +102,7 @@ def optimized_meal_detector(glucose_data):
         if rise_points >= 7:
             votes += 1
     
-    # Rule 15: Quick rise detection
+    # Rule 15: Quick rise
     if len(glucose) >= 3:
         quick_rise = glucose[2] - glucose[0]
         if quick_rise > 4:
