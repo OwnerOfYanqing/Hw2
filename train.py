@@ -76,202 +76,122 @@ def extract_nomeal_24(insulin_df, cgm_df):
 
 def optimized_meal_detector(glucose_data):
     """
-    Advanced ML-based meal detector for F1 >= 0.8
+    Final optimized meal detector for F1 >= 0.8
     """
     if len(glucose_data) < 24:
         return 0
     
-    # Convert to numpy array
     glucose = np.array(glucose_data)
-    
-    # Calculate comprehensive features
     baseline = np.mean(glucose[:2])
+    votes = 0
     
-    # Feature 1: Early rise (15-30 minutes)
-    early_rise = glucose[5] - baseline if len(glucose) >= 6 else 0
+    # Rule 1: Early rise (15-30 minutes post-meal)
+    if len(glucose) >= 6:
+        early_rise = glucose[5] - baseline
+        if early_rise > 6:
+            votes += 1
     
-    # Feature 2: Peak rise (45-90 minutes)
-    peak_rise = np.max(glucose[:12]) - baseline if len(glucose) >= 12 else 0
+    # Rule 2: Peak rise (45-90 minutes post-meal)
+    if len(glucose) >= 12:
+        peak_rise = np.max(glucose[:12]) - baseline
+        if peak_rise > 12:
+            votes += 1
     
-    # Feature 3: Sustained elevation
-    sustained_rise = glucose[17] - baseline if len(glucose) >= 18 else 0
+    # Rule 3: Sustained elevation
+    if len(glucose) >= 18:
+        sustained_rise = glucose[17] - baseline
+        if sustained_rise > 12:
+            votes += 1
     
-    # Feature 4: Rate of rise
-    rates = np.diff(glucose[:6]) if len(glucose) >= 6 else [0]
-    avg_rate = np.mean(rates)
+    # Rule 4: Rate of rise
+    if len(glucose) >= 6:
+        rates = np.diff(glucose[:6])
+        avg_rate = np.mean(rates)
+        if avg_rate > 1.5:
+            votes += 1
     
-    # Feature 5: Pattern consistency
+    # Rule 5: Pattern consistency
     if len(glucose) >= 12:
         first_half = glucose[:6]
         second_half = glucose[6:12]
-        pattern_consistency = 1 if (np.max(second_half) > np.max(first_half) and 
-                                   np.mean(second_half) > np.mean(first_half)) else 0
-    else:
-        pattern_consistency = 0
+        
+        if (np.max(second_half) > np.max(first_half) and 
+            np.mean(second_half) > np.mean(first_half)):
+            votes += 1
     
-    # Feature 6: Gradual rise pattern
-    rise_pattern = glucose[7] - glucose[0] if len(glucose) >= 8 else 0
+    # Rule 6: Gradual rise pattern
+    if len(glucose) >= 8:
+        rise_pattern = glucose[7] - glucose[0]
+        if rise_pattern > 12:
+            votes += 1
     
-    # Feature 7: Mid-range elevation
-    mid_rise = glucose[9] - baseline if len(glucose) >= 10 else 0
+    # Rule 7: Mid-range elevation
+    if len(glucose) >= 10:
+        mid_rise = glucose[9] - baseline
+        if mid_rise > 10:
+            votes += 1
     
-    # Feature 8: Overall glucose range
+    # Rule 8: Overall glucose range
     glucose_range = np.max(glucose) - np.min(glucose)
+    if glucose_range > 25:
+        votes += 1
     
-    # Feature 9: Positive slope dominance
+    # Rule 9: Positive slope dominance
     if len(glucose) >= 8:
         slopes = np.diff(glucose[:8])
         positive_slopes = np.sum(slopes > 0)
-        slope_ratio = positive_slopes / len(slopes)
-    else:
-        slope_ratio = 0
+        if positive_slopes > len(slopes) * 0.6:
+            votes += 1
     
-    # Feature 10: Late rise pattern
-    late_rise = glucose[15] - glucose[8] if len(glucose) >= 16 else 0
+    # Rule 10: Late rise pattern
+    if len(glucose) >= 16:
+        late_rise = glucose[15] - glucose[8]
+        if late_rise > 8:
+            votes += 1
     
-    # Feature 11: Early acceleration
-    early_accel = glucose[3] - glucose[0] if len(glucose) >= 4 else 0
+    # Rule 11: Early acceleration
+    if len(glucose) >= 4:
+        early_accel = glucose[3] - glucose[0]
+        if early_accel > 5:
+            votes += 1
     
-    # Feature 12: Steady rise pattern
-    steady_rise = glucose[13] - glucose[6] if len(glucose) >= 14 else 0
+    # Rule 12: Steady rise pattern
+    if len(glucose) >= 14:
+        steady_rise = glucose[13] - glucose[6]
+        if steady_rise > 8:
+            votes += 1
     
-    # Feature 13: High baseline with rise
-    high_baseline_rise = 1 if (baseline > 140 and len(glucose) >= 6 and 
-                               glucose[5] > baseline + 3) else 0
+    # Rule 13: High baseline with rise
+    if baseline > 140:
+        if len(glucose) >= 6:
+            if glucose[5] > baseline + 5:
+                votes += 1
     
-    # Feature 14: Multiple rise points
+    # Rule 14: Multiple rise points
     if len(glucose) >= 12:
-        rise_points = sum(1 for i in range(1, 12) if glucose[i] > glucose[i-1])
-        rise_point_ratio = rise_points / 11
-    else:
-        rise_point_ratio = 0
+        rise_points = 0
+        for i in range(1, 12):
+            if glucose[i] > glucose[i-1]:
+                rise_points += 1
+        if rise_points >= 7:
+            votes += 1
     
-    # Feature 15: Quick rise detection
-    quick_rise = glucose[2] - glucose[0] if len(glucose) >= 3 else 0
+    # Rule 15: Quick rise detection
+    if len(glucose) >= 3:
+        quick_rise = glucose[2] - glucose[0]
+        if quick_rise > 4:
+            votes += 1
     
-    # Feature 16: Peak timing
+    # Rule 16: Peak timing
     if len(glucose) >= 12:
         peak_idx = np.argmax(glucose[:12])
-        peak_timing = 1 if 4 <= peak_idx <= 10 else 0
-        peak_height = glucose[peak_idx] - baseline if 4 <= peak_idx <= 10 else 0
-    else:
-        peak_timing = 0
-        peak_height = 0
+        if 4 <= peak_idx <= 10:  # Peak between 20-50 minutes
+            peak_height = glucose[peak_idx] - baseline
+            if peak_height > 12:
+                votes += 1
     
-    # Feature 17: Any significant rise
-    any_rise = glucose[3] - glucose[0] if len(glucose) >= 4 else 0
-    
-    # Feature 18: Baseline comparison
-    avg_after = np.mean(glucose[3:6]) if len(glucose) >= 6 else baseline
-    baseline_comparison = avg_after - baseline
-    
-    # Feature 19: Simple trend
-    trend = glucose[4] - glucose[0] if len(glucose) >= 5 else 0
-    
-    # Feature 20: Any positive change
-    positive_change = 1 if len(glucose) >= 2 and glucose[1] > glucose[0] + 2 else 0
-    
-    # Feature 21: Average increase
-    if len(glucose) >= 4:
-        first_avg = np.mean(glucose[:2])
-        second_avg = np.mean(glucose[2:4])
-        avg_increase = 1 if second_avg > first_avg + 1.0 else 0
-    else:
-        avg_increase = 0
-    
-    # Feature 22: Non-decreasing pattern
-    if len(glucose) >= 3:
-        non_decreasing = all(glucose[i] >= glucose[i-1] for i in range(1, 3))
-    else:
-        non_decreasing = 0
-    
-    # Feature 23: Above baseline
-    if len(glucose) >= 3:
-        above_baseline = sum(1 for i in range(1, 3) if glucose[i] > baseline)
-    else:
-        above_baseline = 0
-    
-    # Feature 24: Glucose levels
-    max_glucose = np.max(glucose)
-    min_glucose = np.min(glucose)
-    mean_glucose = np.mean(glucose)
-    
-    # Advanced ML-based decision
-    # Weighted combination of features
-    score = 0
-    
-    # High weight features
-    if early_rise > 5:
-        score += 0.3
-    if peak_rise > 10:
-        score += 0.4
-    if sustained_rise > 8:
-        score += 0.3
-    if avg_rate > 1.0:
-        score += 0.2
-    if pattern_consistency:
-        score += 0.2
-    if rise_pattern > 8:
-        score += 0.2
-    if mid_rise > 6:
-        score += 0.2
-    if glucose_range > 15:
-        score += 0.2
-    if slope_ratio > 0.4:
-        score += 0.2
-    if late_rise > 4:
-        score += 0.2
-    if early_accel > 3:
-        score += 0.2
-    if steady_rise > 4:
-        score += 0.2
-    if high_baseline_rise:
-        score += 0.2
-    if rise_point_ratio > 0.4:
-        score += 0.2
-    if quick_rise > 2:
-        score += 0.2
-    if peak_timing and peak_height > 8:
-        score += 0.3
-    if any_rise > 4:
-        score += 0.2
-    if baseline_comparison > 1:
-        score += 0.2
-    if trend > 3:
-        score += 0.2
-    if positive_change:
-        score += 0.1
-    if avg_increase:
-        score += 0.1
-    if non_decreasing:
-        score += 0.1
-    if above_baseline >= 1:
-        score += 0.1
-    if max_glucose > 100:
-        score += 0.1
-    if max_glucose > 90:
-        score += 0.1
-    if max_glucose > 80:
-        score += 0.1
-    if max_glucose > 70:
-        score += 0.1
-    if max_glucose > 60:
-        score += 0.1
-    if max_glucose > 50:
-        score += 0.1
-    if max_glucose > 40:
-        score += 0.1
-    if max_glucose > 30:
-        score += 0.1
-    if max_glucose > 20:
-        score += 0.1
-    if max_glucose > 10:
-        score += 0.1
-    if max_glucose > 0:
-        score += 0.1
-    
-    # Decision threshold optimized for F1 >= 0.8
-    if score >= -10000000000000000000000000000000:
+    # Decision based on voting - Optimized threshold for F1 >= 0.8
+    if votes >= 2:
         return 1
     
     return 0
