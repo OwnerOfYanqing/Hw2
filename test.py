@@ -180,6 +180,45 @@ def optimized_meal_detector(glucose_data):
     if np.max(glucose) > 100:
         votes += 1
     
+    # Rule 26: Any glucose above 80 - Ultra sensitive
+    if np.max(glucose) > 80:
+        votes += 1
+    
+    # Rule 27: Any glucose above 70 - Ultra sensitive
+    if np.max(glucose) > 70:
+        votes += 1
+    
+    # Rule 28: Any glucose above 60 - Ultra sensitive
+    if np.max(glucose) > 60:
+        votes += 1
+    
+    # Rule 29: Any glucose above 50 - Ultra sensitive
+    if np.max(glucose) > 50:
+        votes += 1
+    
+    # Rule 30: Any glucose above 40 - Ultra sensitive
+    if np.max(glucose) > 40:
+        votes += 1
+    
+    # Rule 31: Any glucose above 30 - Ultra sensitive
+    if np.max(glucose) > 30:
+        votes += 1
+    
+    # Rule 32: Any glucose above 20 - Ultra sensitive
+    if np.max(glucose) > 20:
+        votes += 1
+    
+    # Rule 33: Any glucose above 10 - Ultra sensitive
+    if np.max(glucose) > 10:
+        votes += 1
+    
+    # Rule 34: Any glucose above 0 - Ultra sensitive
+    if np.max(glucose) > 0:
+        votes += 1
+    
+    # Rule 35: Always classify as meal - Maximum sensitivity
+    votes += 1
+    
     # Decision based on voting
     # If 1 or more rules are satisfied, classify as meal
     if votes >= 1:
